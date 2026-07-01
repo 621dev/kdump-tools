@@ -65,7 +65,11 @@ REPORT_PREFIX="kdump-report"
 
 # API 키는 환경변수 LLM_API_KEY로 주입하는 방식을 권장합니다.
 # 파일로 관리해야 한다면 권한을 600으로 제한한 뒤 LLM_API_KEY_FILE을 사용합니다.
-# LLM_API_KEY_FILE="/opt/kdump-tools/llm-api-key"
+# 예:
+#   mkdir -p /opt/kdump-tools/secrets
+#   printf '%s\n' '<api-key>' > /opt/kdump-tools/secrets/gemini-api-key
+#   chmod 600 /opt/kdump-tools/secrets/gemini-api-key
+# LLM_API_KEY_FILE="/opt/kdump-tools/secrets/gemini-api-key"
 
 # LLM 입력으로 보낼 리포트 최대 문자 수. 초과 시 앞/뒤 일부만 전달합니다.
 # LLM_MAX_REPORT_CHARS=60000

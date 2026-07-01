@@ -164,6 +164,22 @@ export LLM_API_KEY="<api-key>"
 analyze-kdump -report -llm /path/to/vmcore
 ```
 
+API 키를 파일로 저장해야 한다면 `secrets/` 디렉터리에 두고 권한을 제한합니다. 저장소 루트의 `secrets/`는 Git에 올라가지 않도록 `.gitignore`에 포함되어 있습니다.
+
+```bash
+mkdir -p /opt/kdump-tools/secrets
+printf '%s\n' '<gemini-api-key>' > /opt/kdump-tools/secrets/gemini-api-key
+chmod 600 /opt/kdump-tools/secrets/gemini-api-key
+```
+
+이 경우 실제 `analyze-kdump.conf`에는 다음처럼 지정합니다.
+
+```bash
+LLM_PROVIDER="gemini"
+LLM_MODEL="gemini-3.5-flash"
+LLM_API_KEY_FILE="/opt/kdump-tools/secrets/gemini-api-key"
+```
+
 Provider별 최소 설정 예시는 다음과 같습니다.
 
 ```bash

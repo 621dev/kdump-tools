@@ -8,3 +8,4 @@ logs/*
 
 # Local configuration
 /analyze-kdump.conf
+/secrets/
