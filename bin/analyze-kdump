@@ -9,14 +9,28 @@ ENV_REPORT_PREFIX="${REPORT_PREFIX:-}"
 ENV_DEFAULT_VMCORE="${DEFAULT_VMCORE:-}"
 ENV_REPORT_COMMANDS="${REPORT_COMMANDS:-}"
 ENV_REPORT_COMMAND_FILE="${REPORT_COMMAND_FILE:-}"
+ENV_LLM_ENABLED="${LLM_ENABLED:-}"
+ENV_LLM_API_KEY="${LLM_API_KEY:-}"
+ENV_LLM_API_KEY_FILE="${LLM_API_KEY_FILE:-}"
+ENV_LLM_BASE_URL="${LLM_BASE_URL:-}"
+ENV_LLM_MODEL="${LLM_MODEL:-}"
+ENV_LLM_MAX_REPORT_CHARS="${LLM_MAX_REPORT_CHARS:-}"
+ENV_LLM_TIMEOUT="${LLM_TIMEOUT:-}"
+ENV_LLM_PROMPT_FILE="${LLM_PROMPT_FILE:-}"
 VMLINUX_BASE="${VMLINUX_BASE:-/opt/kdump-tools/vmlinux}"
 REPORT_DIR="${REPORT_DIR:-/opt/kdump-tools/logs}"
 REPORT_PREFIX="${REPORT_PREFIX:-kdump-report}"
+LLM_ENABLED="${LLM_ENABLED:-0}"
+LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1/chat/completions}"
+LLM_MODEL="${LLM_MODEL:-gpt-4o-mini}"
+LLM_MAX_REPORT_CHARS="${LLM_MAX_REPORT_CHARS:-60000}"
+LLM_TIMEOUT="${LLM_TIMEOUT:-120}"
 REPORT_MODE=0
+LLM_MODE=""
 VMCORE=""
 
 usage() {
-    echo "사용법: analyze-kdump [-config <conf-file>] [-report|-r] [/path/to/vmcore]"
+    echo "사용법: analyze-kdump [-config <conf-file>] [-report|-r] [-llm|--llm] [/path/to/vmcore]"
 }
 
 load_config() {
@@ -66,6 +80,180 @@ run_crash_report() {
     } | crash "$VMLINUX" "$VMCORE" >> "$REPORT_FILE" 2>&1
 }
 
+is_enabled() {
+    case "$1" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+get_llm_api_key() {
+    if [ -n "${LLM_API_KEY:-}" ]; then
+        printf '%s' "$LLM_API_KEY"
+        return
+    fi
+
+    if [ -n "${LLM_API_KEY_FILE:-}" ]; then
+        if [ ! -f "$LLM_API_KEY_FILE" ]; then
+            echo "LLM API key 파일을 찾을 수 없습니다: $LLM_API_KEY_FILE"
+            return 1
+        fi
+        sed -n '1p' "$LLM_API_KEY_FILE"
+        return
+    fi
+
+    echo "LLM_API_KEY 또는 LLM_API_KEY_FILE을 설정해 주세요."
+    return 1
+}
+
+write_llm_payload() {
+    python3 - "$REPORT_FILE" "$LLM_MODEL" "$LLM_MAX_REPORT_CHARS" "${LLM_PROMPT_FILE:-}" > "$1" <<'PY'
+import json
+import sys
+
+report_path, model, max_chars_raw, prompt_file = sys.argv[1:5]
+try:
+    max_chars = int(max_chars_raw)
+except ValueError:
+    max_chars = 60000
+
+with open(report_path, "r", encoding="utf-8", errors="replace") as report:
+    report_text = report.read()
+
+if max_chars > 0 and len(report_text) > max_chars:
+    head_len = max_chars // 2
+    tail_len = max_chars - head_len
+    report_text = (
+        report_text[:head_len]
+        + "\n\n[... report truncated for LLM input ...]\n\n"
+        + report_text[-tail_len:]
+    )
+
+if prompt_file:
+    with open(prompt_file, "r", encoding="utf-8", errors="replace") as prompt:
+        system_prompt = prompt.read()
+else:
+    system_prompt = """You are a senior Linux kernel crash dump analyst.
+Analyze the crash report and write a concise Korean incident report.
+Include: probable root cause, evidence, impacted subsystem/process, confidence, and recommended next actions.
+If evidence is insufficient, say what additional crash commands or data are needed."""
+
+payload = {
+    "model": model,
+    "temperature": 0.2,
+    "messages": [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": report_text},
+    ],
+}
+
+print(json.dumps(payload, ensure_ascii=False))
+PY
+}
+
+extract_llm_content() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as response:
+    data = json.load(response)
+
+content = ""
+choices = data.get("choices") or []
+if choices:
+    message = choices[0].get("message") or {}
+    content = message.get("content") or choices[0].get("text") or ""
+
+if not content and isinstance(data.get("output_text"), str):
+    content = data["output_text"]
+
+if not content:
+    output = data.get("output") or []
+    parts = []
+    for item in output:
+        for subitem in item.get("content", []):
+            text = subitem.get("text")
+            if text:
+                parts.append(text)
+    content = "\n".join(parts)
+
+if not content:
+    raise SystemExit("LLM 응답에서 분석 내용을 찾을 수 없습니다.")
+
+print(content.strip())
+PY
+}
+
+append_llm_analysis() {
+    if ! is_enabled "$LLM_ENABLED"; then
+        return
+    fi
+
+    {
+        echo
+        echo "===== llm root cause analysis ====="
+        echo "model:     $LLM_MODEL"
+        echo "generated: $(date -Is)"
+        echo
+    } >> "$REPORT_FILE"
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "LLM 분석을 건너뜁니다: curl 명령을 찾을 수 없습니다." >> "$REPORT_FILE"
+        return
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "LLM 분석을 건너뜁니다: python3 명령을 찾을 수 없습니다." >> "$REPORT_FILE"
+        return
+    fi
+
+    if ! API_KEY=$(get_llm_api_key); then
+        echo "LLM 분석을 건너뜁니다: $API_KEY" >> "$REPORT_FILE"
+        return
+    fi
+
+    PAYLOAD_FILE=$(mktemp)
+    RESPONSE_FILE=$(mktemp)
+    CURL_CONFIG_FILE=$(mktemp)
+
+    {
+        echo "header = \"Authorization: Bearer $API_KEY\""
+        echo "header = \"Content-Type: application/json\""
+    } > "$CURL_CONFIG_FILE"
+    chmod 600 "$CURL_CONFIG_FILE"
+
+    if ! write_llm_payload "$PAYLOAD_FILE"; then
+        echo "LLM 분석을 건너뜁니다: 요청 payload 생성에 실패했습니다." >> "$REPORT_FILE"
+        rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
+        return
+    fi
+
+    if ! HTTP_STATUS=$(curl -sS --connect-timeout 10 --max-time "$LLM_TIMEOUT" -w '%{http_code}' -o "$RESPONSE_FILE" --config "$CURL_CONFIG_FILE" -X POST --data-binary "@$PAYLOAD_FILE" "$LLM_BASE_URL" 2>&1); then
+        echo "LLM 분석을 건너뜁니다: API 호출 실패" >> "$REPORT_FILE"
+        echo "$HTTP_STATUS" >> "$REPORT_FILE"
+        rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
+        return
+    fi
+
+    if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
+        echo "LLM 분석을 건너뜁니다: API 응답 코드 $HTTP_STATUS" >> "$REPORT_FILE"
+        sed -n '1,40p' "$RESPONSE_FILE" >> "$REPORT_FILE"
+        rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
+        return
+    fi
+
+    if ! extract_llm_content "$RESPONSE_FILE" >> "$REPORT_FILE"; then
+        echo "LLM 분석을 건너뜁니다: 응답 파싱에 실패했습니다." >> "$REPORT_FILE"
+    fi
+
+    rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -config)
@@ -80,6 +268,15 @@ while [ "$#" -gt 0 ]; do
             ;;
         -report|-r)
             REPORT_MODE=1
+            shift
+            ;;
+        -llm|--llm)
+            LLM_MODE=1
+            REPORT_MODE=1
+            shift
+            ;;
+        -no-llm|--no-llm)
+            LLM_MODE=0
             shift
             ;;
         -h|--help)
@@ -105,6 +302,7 @@ done
 
 CLI_VMCORE="$VMCORE"
 CLI_REPORT_MODE="$REPORT_MODE"
+CLI_LLM_MODE="$LLM_MODE"
 load_config
 REPORT_MODE="$CLI_REPORT_MODE"
 
@@ -114,6 +312,15 @@ REPORT_MODE="$CLI_REPORT_MODE"
 [ -n "$ENV_DEFAULT_VMCORE" ] && DEFAULT_VMCORE="$ENV_DEFAULT_VMCORE"
 [ -n "$ENV_REPORT_COMMANDS" ] && REPORT_COMMANDS="$ENV_REPORT_COMMANDS"
 [ -n "$ENV_REPORT_COMMAND_FILE" ] && REPORT_COMMAND_FILE="$ENV_REPORT_COMMAND_FILE"
+[ -n "$ENV_LLM_ENABLED" ] && LLM_ENABLED="$ENV_LLM_ENABLED"
+[ -n "$ENV_LLM_API_KEY" ] && LLM_API_KEY="$ENV_LLM_API_KEY"
+[ -n "$ENV_LLM_API_KEY_FILE" ] && LLM_API_KEY_FILE="$ENV_LLM_API_KEY_FILE"
+[ -n "$ENV_LLM_BASE_URL" ] && LLM_BASE_URL="$ENV_LLM_BASE_URL"
+[ -n "$ENV_LLM_MODEL" ] && LLM_MODEL="$ENV_LLM_MODEL"
+[ -n "$ENV_LLM_MAX_REPORT_CHARS" ] && LLM_MAX_REPORT_CHARS="$ENV_LLM_MAX_REPORT_CHARS"
+[ -n "$ENV_LLM_TIMEOUT" ] && LLM_TIMEOUT="$ENV_LLM_TIMEOUT"
+[ -n "$ENV_LLM_PROMPT_FILE" ] && LLM_PROMPT_FILE="$ENV_LLM_PROMPT_FILE"
+[ -n "$CLI_LLM_MODE" ] && LLM_ENABLED="$CLI_LLM_MODE"
 
 if [ -n "$CLI_VMCORE" ]; then
     VMCORE="$CLI_VMCORE"
@@ -183,6 +390,7 @@ if [ "$REPORT_MODE" -eq 1 ]; then
     } > "$REPORT_FILE"
 
     run_crash_report
+    append_llm_analysis
 
     echo "report:  $REPORT_FILE"
     exit 0
