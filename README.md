@@ -49,10 +49,11 @@ dnf install -y crash dnf-plugins-core
 /opt/kdump-tools/bin/analyze-kdump /path/to/vmcore
 ```
 
-요약 리포트만 생성하려면 `-report` 옵션을 사용합니다.
+요약 리포트만 생성하려면 `-report` 또는 `-r` 옵션을 사용합니다.
 
 ```bash
 /opt/kdump-tools/bin/analyze-kdump -report /path/to/vmcore
+/opt/kdump-tools/bin/analyze-kdump -r /path/to/vmcore
 ```
 
 기본 설정 파일은 `/opt/kdump-tools/analyze-kdump.conf`입니다. 다른 설정 파일을 사용하려면 `-config` 옵션으로 지정합니다.

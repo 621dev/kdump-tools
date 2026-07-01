@@ -16,7 +16,7 @@ REPORT_MODE=0
 VMCORE=""
 
 usage() {
-    echo "사용법: analyze-kdump [-config <conf-file>] [-report] [/path/to/vmcore]"
+    echo "사용법: analyze-kdump [-config <conf-file>] [-report|-r] [/path/to/vmcore]"
 }
 
 load_config() {
@@ -78,7 +78,7 @@ while [ "$#" -gt 0 ]; do
             CONFIG_FILE_SET=1
             shift 2
             ;;
-        -report)
+        -report|-r)
             REPORT_MODE=1
             shift
             ;;
