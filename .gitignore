@@ -5,3 +5,6 @@ packages/
 # Logs
 logs/*
 !logs/.gitkeep
+
+# Local configuration
+/analyze-kdump.conf

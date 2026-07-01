@@ -20,7 +20,7 @@
 ```text
 /opt/kdump-tools/
 ├── README.md
-├── analyze-kdump.conf
+├── analyze-kdump.conf.sample
 ├── bin/
 │   └── analyze-kdump
 ├── logs/
@@ -75,7 +75,7 @@ analyze-kdump /path/to/vmcore
 LLM_API_KEY="<api-key>" /opt/kdump-tools/bin/analyze-kdump -llm /path/to/vmcore
 ```
 
-기본 설정 파일은 `/opt/kdump-tools/analyze-kdump.conf`입니다. 다른 설정 파일을 사용하려면 `-config` 옵션으로 지정합니다.
+기본 설정 파일은 `/opt/kdump-tools/analyze-kdump.conf`입니다. 저장소에는 샘플 파일인 `analyze-kdump.conf.sample`만 포함하고, 실제 설정 파일인 `analyze-kdump.conf`는 Git에 올리지 않습니다. 다른 설정 파일을 사용하려면 `-config` 옵션으로 지정합니다.
 
 ```bash
 /opt/kdump-tools/bin/analyze-kdump -config /path/to/analyze-kdump.conf -report /path/to/vmcore
@@ -116,7 +116,7 @@ LLM 분석이 활성화된 경우 리포트 끝에 `llm root cause analysis` 섹
 
 ## 설정 파일
 
-`analyze-kdump.conf`는 bash 변수 형식으로 작성합니다.
+`analyze-kdump.conf.sample`은 bash 변수 형식으로 작성된 샘플입니다. 실제 운영 설정은 `/opt/kdump-tools/analyze-kdump.conf` 또는 `-config`로 지정한 파일에 작성합니다.
 
 ```bash
 VMLINUX_BASE="/opt/kdump-tools/vmlinux"
@@ -128,8 +128,9 @@ DEFAULT_VMCORE="/var/crash/127.0.0.1-2026-07-01-10:00:00/vmcore"
 
 # 선택 사항: LLM 분석
 LLM_ENABLED=0
-LLM_BASE_URL="https://api.openai.com/v1/chat/completions"
+LLM_PROVIDER="openai"
 LLM_MODEL="gpt-4o-mini"
+LLM_MAX_TOKENS=2048
 LLM_MAX_REPORT_CHARS=60000
 LLM_TIMEOUT=120
 ```
@@ -145,11 +146,14 @@ LLM_TIMEOUT=120
 - `LLM_ENABLED`: `1`, `true`, `yes`, `on`으로 설정하면 `-report` 실행 시 LLM 분석 추가
 - `LLM_API_KEY`: LLM API 키. conf 파일에 저장하기보다 환경변수로 주입하는 방식을 권장
 - `LLM_API_KEY_FILE`: API 키를 담은 파일 경로. 파일 권한은 `600` 권장
-- `LLM_BASE_URL`: OpenAI 호환 Chat Completions API 엔드포인트
+- `LLM_PROVIDER`: `openai`, `gemini`, `claude` 중 하나. `openai`는 OpenAI 호환 Chat Completions API도 포함
+- `LLM_BASE_URL`: provider 기본 엔드포인트 대신 사용할 API 엔드포인트
 - `LLM_MODEL`: 사용할 모델명
+- `LLM_MAX_TOKENS`: LLM이 생성할 최대 토큰 수
 - `LLM_MAX_REPORT_CHARS`: LLM 입력으로 전달할 리포트 최대 문자 수
 - `LLM_TIMEOUT`: LLM API 호출 제한 시간(초)
 - `LLM_PROMPT_FILE`: 기본 원인분석 프롬프트 대신 사용할 프롬프트 파일
+- `LLM_ANTHROPIC_VERSION`: Claude API에 전달할 Anthropic API 버전. 기본값은 `2023-06-01`
 
 환경변수로도 기본값을 바꿀 수 있지만, 운영 환경에서는 conf 파일로 관리하는 방식을 권장합니다.
 
@@ -158,6 +162,22 @@ API 키는 다음처럼 실행 시 환경변수로 전달할 수 있습니다.
 ```bash
 export LLM_API_KEY="<api-key>"
 analyze-kdump -report -llm /path/to/vmcore
+```
+
+Provider별 최소 설정 예시는 다음과 같습니다.
+
+```bash
+# OpenAI 또는 OpenAI 호환 API
+LLM_PROVIDER="openai"
+LLM_MODEL="gpt-4o-mini"
+
+# Gemini
+LLM_PROVIDER="gemini"
+LLM_MODEL="gemini-3.5-flash"
+
+# Claude
+LLM_PROVIDER="claude"
+LLM_MODEL="claude-sonnet-4-5"
 ```
 
 ## vmlinux 추가 방법

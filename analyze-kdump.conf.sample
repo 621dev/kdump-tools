@@ -1,7 +1,8 @@
-# analyze-kdump 설정 파일
+# analyze-kdump 설정 파일 샘플
 #
-# 설치 위치 예:
-#   /opt/kdump-tools/analyze-kdump.conf
+# 실제 운영 설정은 이 파일을 참고해 /opt/kdump-tools/analyze-kdump.conf
+# 또는 저장소 루트의 analyze-kdump.conf에 작성합니다.
+# 저장소 루트의 analyze-kdump.conf는 .gitignore에 포함되어 커밋되지 않습니다.
 #
 # 스크립트 실행 시 다른 conf 파일을 지정할 수도 있습니다.
 #   analyze-kdump -config /path/to/analyze-kdump.conf -report /path/to/vmcore
@@ -43,9 +44,24 @@ REPORT_PREFIX="kdump-report"
 # 명령줄에서 일회성으로 켜려면 analyze-kdump -report -llm /path/to/vmcore 를 사용합니다.
 # LLM_ENABLED=0
 
-# OpenAI 호환 Chat Completions API 엔드포인트와 모델명.
+# LLM provider와 모델명.
+# 지원 provider:
+#   openai  - OpenAI 또는 OpenAI 호환 Chat Completions API
+#   gemini  - Google Gemini generateContent API
+#   claude  - Anthropic Claude Messages API
+# LLM_PROVIDER="openai"
 # LLM_BASE_URL="https://api.openai.com/v1/chat/completions"
 # LLM_MODEL="gpt-4o-mini"
+# LLM_MAX_TOKENS=2048
+#
+# Gemini 예:
+# LLM_PROVIDER="gemini"
+# LLM_MODEL="gemini-3.5-flash"
+#
+# Claude 예:
+# LLM_PROVIDER="claude"
+# LLM_MODEL="claude-sonnet-4-5"
+# LLM_ANTHROPIC_VERSION="2023-06-01"
 
 # API 키는 환경변수 LLM_API_KEY로 주입하는 방식을 권장합니다.
 # 파일로 관리해야 한다면 권한을 600으로 제한한 뒤 LLM_API_KEY_FILE을 사용합니다.

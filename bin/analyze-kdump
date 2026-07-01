@@ -12,19 +12,25 @@ ENV_REPORT_COMMAND_FILE="${REPORT_COMMAND_FILE:-}"
 ENV_LLM_ENABLED="${LLM_ENABLED:-}"
 ENV_LLM_API_KEY="${LLM_API_KEY:-}"
 ENV_LLM_API_KEY_FILE="${LLM_API_KEY_FILE:-}"
+ENV_LLM_PROVIDER="${LLM_PROVIDER:-}"
 ENV_LLM_BASE_URL="${LLM_BASE_URL:-}"
 ENV_LLM_MODEL="${LLM_MODEL:-}"
+ENV_LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-}"
 ENV_LLM_MAX_REPORT_CHARS="${LLM_MAX_REPORT_CHARS:-}"
 ENV_LLM_TIMEOUT="${LLM_TIMEOUT:-}"
 ENV_LLM_PROMPT_FILE="${LLM_PROMPT_FILE:-}"
+ENV_LLM_ANTHROPIC_VERSION="${LLM_ANTHROPIC_VERSION:-}"
 VMLINUX_BASE="${VMLINUX_BASE:-/opt/kdump-tools/vmlinux}"
 REPORT_DIR="${REPORT_DIR:-/opt/kdump-tools/logs}"
 REPORT_PREFIX="${REPORT_PREFIX:-kdump-report}"
 LLM_ENABLED="${LLM_ENABLED:-0}"
-LLM_BASE_URL="${LLM_BASE_URL:-https://api.openai.com/v1/chat/completions}"
+LLM_PROVIDER="${LLM_PROVIDER:-openai}"
+LLM_BASE_URL="${LLM_BASE_URL:-}"
 LLM_MODEL="${LLM_MODEL:-gpt-4o-mini}"
+LLM_MAX_TOKENS="${LLM_MAX_TOKENS:-2048}"
 LLM_MAX_REPORT_CHARS="${LLM_MAX_REPORT_CHARS:-60000}"
 LLM_TIMEOUT="${LLM_TIMEOUT:-120}"
+LLM_ANTHROPIC_VERSION="${LLM_ANTHROPIC_VERSION:-2023-06-01}"
 REPORT_MODE=0
 LLM_MODE=""
 VMCORE=""
@@ -110,16 +116,67 @@ get_llm_api_key() {
     return 1
 }
 
+normalize_llm_provider() {
+    case "$1" in
+        openai|openai-compatible|chat-completions)
+            echo "openai"
+            ;;
+        gemini|google)
+            echo "gemini"
+            ;;
+        claude|anthropic)
+            echo "claude"
+            ;;
+        *)
+            echo "$1"
+            ;;
+    esac
+}
+
+get_llm_url() {
+    if [ -n "${LLM_BASE_URL:-}" ]; then
+        printf '%s' "$LLM_BASE_URL"
+        return
+    fi
+
+    case "$LLM_PROVIDER" in
+        openai)
+            printf '%s' "https://api.openai.com/v1/chat/completions"
+            ;;
+        gemini)
+            case "$LLM_MODEL" in
+                models/*)
+                    printf '%s' "https://generativelanguage.googleapis.com/v1beta/${LLM_MODEL}:generateContent"
+                    ;;
+                *)
+                    printf '%s' "https://generativelanguage.googleapis.com/v1beta/models/${LLM_MODEL}:generateContent"
+                    ;;
+            esac
+            ;;
+        claude)
+            printf '%s' "https://api.anthropic.com/v1/messages"
+            ;;
+        *)
+            echo "지원하지 않는 LLM_PROVIDER입니다: $LLM_PROVIDER"
+            return 1
+            ;;
+    esac
+}
+
 write_llm_payload() {
-    python3 - "$REPORT_FILE" "$LLM_MODEL" "$LLM_MAX_REPORT_CHARS" "${LLM_PROMPT_FILE:-}" > "$1" <<'PY'
+    python3 - "$REPORT_FILE" "$LLM_PROVIDER" "$LLM_MODEL" "$LLM_MAX_REPORT_CHARS" "$LLM_MAX_TOKENS" "${LLM_PROMPT_FILE:-}" > "$1" <<'PY'
 import json
 import sys
 
-report_path, model, max_chars_raw, prompt_file = sys.argv[1:5]
+report_path, provider, model, max_chars_raw, max_tokens_raw, prompt_file = sys.argv[1:7]
 try:
     max_chars = int(max_chars_raw)
 except ValueError:
     max_chars = 60000
+try:
+    max_tokens = int(max_tokens_raw)
+except ValueError:
+    max_tokens = 2048
 
 with open(report_path, "r", encoding="utf-8", errors="replace") as report:
     report_text = report.read()
@@ -142,45 +199,93 @@ Analyze the crash report and write a concise Korean incident report.
 Include: probable root cause, evidence, impacted subsystem/process, confidence, and recommended next actions.
 If evidence is insufficient, say what additional crash commands or data are needed."""
 
-payload = {
-    "model": model,
-    "temperature": 0.2,
-    "messages": [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": report_text},
-    ],
-}
+if provider == "openai":
+    payload = {
+        "model": model,
+        "temperature": 0.2,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": report_text},
+        ],
+    }
+elif provider == "gemini":
+    payload = {
+        "systemInstruction": {
+            "parts": [{"text": system_prompt}],
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": report_text}],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": max_tokens,
+        },
+    }
+elif provider == "claude":
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system_prompt,
+        "messages": [
+            {"role": "user", "content": report_text},
+        ],
+    }
+else:
+    raise SystemExit(f"지원하지 않는 LLM_PROVIDER입니다: {provider}")
 
 print(json.dumps(payload, ensure_ascii=False))
 PY
 }
 
 extract_llm_content() {
-    python3 - "$1" <<'PY'
+    python3 - "$LLM_PROVIDER" "$1" <<'PY'
 import json
 import sys
 
-with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as response:
+provider, response_path = sys.argv[1:3]
+
+with open(response_path, "r", encoding="utf-8", errors="replace") as response:
     data = json.load(response)
 
 content = ""
-choices = data.get("choices") or []
-if choices:
-    message = choices[0].get("message") or {}
-    content = message.get("content") or choices[0].get("text") or ""
 
-if not content and isinstance(data.get("output_text"), str):
-    content = data["output_text"]
-
-if not content:
-    output = data.get("output") or []
+if provider == "gemini":
     parts = []
-    for item in output:
-        for subitem in item.get("content", []):
-            text = subitem.get("text")
+    for candidate in data.get("candidates", []):
+        candidate_content = candidate.get("content") or {}
+        for part in candidate_content.get("parts", []):
+            text = part.get("text")
             if text:
                 parts.append(text)
     content = "\n".join(parts)
+elif provider == "claude":
+    parts = []
+    for item in data.get("content", []):
+        text = item.get("text")
+        if text:
+            parts.append(text)
+    content = "\n".join(parts)
+else:
+    choices = data.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        content = message.get("content") or choices[0].get("text") or ""
+
+    if not content and isinstance(data.get("output_text"), str):
+        content = data["output_text"]
+
+    if not content:
+        output = data.get("output") or []
+        parts = []
+        for item in output:
+            for subitem in item.get("content", []):
+                text = subitem.get("text")
+                if text:
+                    parts.append(text)
+        content = "\n".join(parts)
 
 if not content:
     raise SystemExit("LLM 응답에서 분석 내용을 찾을 수 없습니다.")
@@ -194,9 +299,12 @@ append_llm_analysis() {
         return
     fi
 
+    LLM_PROVIDER=$(normalize_llm_provider "$LLM_PROVIDER")
+
     {
         echo
         echo "===== llm root cause analysis ====="
+        echo "provider:  $LLM_PROVIDER"
         echo "model:     $LLM_MODEL"
         echo "generated: $(date -Is)"
         echo
@@ -217,13 +325,29 @@ append_llm_analysis() {
         return
     fi
 
+    if ! LLM_URL=$(get_llm_url); then
+        echo "LLM 분석을 건너뜁니다: $LLM_URL" >> "$REPORT_FILE"
+        return
+    fi
+
     PAYLOAD_FILE=$(mktemp)
     RESPONSE_FILE=$(mktemp)
     CURL_CONFIG_FILE=$(mktemp)
 
     {
-        echo "header = \"Authorization: Bearer $API_KEY\""
         echo "header = \"Content-Type: application/json\""
+        case "$LLM_PROVIDER" in
+            openai)
+                echo "header = \"Authorization: Bearer $API_KEY\""
+                ;;
+            gemini)
+                echo "header = \"x-goog-api-key: $API_KEY\""
+                ;;
+            claude)
+                echo "header = \"x-api-key: $API_KEY\""
+                echo "header = \"anthropic-version: $LLM_ANTHROPIC_VERSION\""
+                ;;
+        esac
     } > "$CURL_CONFIG_FILE"
     chmod 600 "$CURL_CONFIG_FILE"
 
@@ -233,7 +357,7 @@ append_llm_analysis() {
         return
     fi
 
-    if ! HTTP_STATUS=$(curl -sS --connect-timeout 10 --max-time "$LLM_TIMEOUT" -w '%{http_code}' -o "$RESPONSE_FILE" --config "$CURL_CONFIG_FILE" -X POST --data-binary "@$PAYLOAD_FILE" "$LLM_BASE_URL" 2>&1); then
+    if ! HTTP_STATUS=$(curl -sS --connect-timeout 10 --max-time "$LLM_TIMEOUT" -w '%{http_code}' -o "$RESPONSE_FILE" --config "$CURL_CONFIG_FILE" -X POST --data-binary "@$PAYLOAD_FILE" "$LLM_URL" 2>&1); then
         echo "LLM 분석을 건너뜁니다: API 호출 실패" >> "$REPORT_FILE"
         echo "$HTTP_STATUS" >> "$REPORT_FILE"
         rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
@@ -315,11 +439,14 @@ REPORT_MODE="$CLI_REPORT_MODE"
 [ -n "$ENV_LLM_ENABLED" ] && LLM_ENABLED="$ENV_LLM_ENABLED"
 [ -n "$ENV_LLM_API_KEY" ] && LLM_API_KEY="$ENV_LLM_API_KEY"
 [ -n "$ENV_LLM_API_KEY_FILE" ] && LLM_API_KEY_FILE="$ENV_LLM_API_KEY_FILE"
+[ -n "$ENV_LLM_PROVIDER" ] && LLM_PROVIDER="$ENV_LLM_PROVIDER"
 [ -n "$ENV_LLM_BASE_URL" ] && LLM_BASE_URL="$ENV_LLM_BASE_URL"
 [ -n "$ENV_LLM_MODEL" ] && LLM_MODEL="$ENV_LLM_MODEL"
+[ -n "$ENV_LLM_MAX_TOKENS" ] && LLM_MAX_TOKENS="$ENV_LLM_MAX_TOKENS"
 [ -n "$ENV_LLM_MAX_REPORT_CHARS" ] && LLM_MAX_REPORT_CHARS="$ENV_LLM_MAX_REPORT_CHARS"
 [ -n "$ENV_LLM_TIMEOUT" ] && LLM_TIMEOUT="$ENV_LLM_TIMEOUT"
 [ -n "$ENV_LLM_PROMPT_FILE" ] && LLM_PROMPT_FILE="$ENV_LLM_PROMPT_FILE"
+[ -n "$ENV_LLM_ANTHROPIC_VERSION" ] && LLM_ANTHROPIC_VERSION="$ENV_LLM_ANTHROPIC_VERSION"
 [ -n "$CLI_LLM_MODE" ] && LLM_ENABLED="$CLI_LLM_MODE"
 
 if [ -n "$CLI_VMCORE" ]; then
