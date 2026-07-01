@@ -93,7 +93,7 @@ conf 파일에서 `DEFAULT_VMCORE`를 지정하면 명령줄에서 vmcore 경로
 2. `/opt/kdump-tools/vmlinux/<kernel-version>/vmlinux` 파일이 있는지 확인합니다.
 3. 파일이 있으면 기본 모드에서는 `crash <vmlinux> <vmcore>`를 실행합니다.
 4. `-report` 모드에서는 `crash` 셸에 진입하지 않고 `/opt/kdump-tools/logs/kdump-report-<timestamp>.txt` 파일을 생성합니다.
-5. LLM 분석이 활성화되어 있으면 생성된 리포트 내용을 API로 보내 원인분석, 근거, 영향 범위, 권고 조치를 리포트 끝에 추가합니다.
+5. LLM 분석이 활성화되어 있으면 생성된 리포트 내용을 API로 보내 원인분석, 근거, 영향 범위, 권고 조치를 별도 분석 파일로 저장합니다.
 6. 파일이 없으면 필요한 `vmlinux` 준비 명령을 안내하고 종료합니다.
 
 예상 출력 예시는 다음과 같습니다.
@@ -108,11 +108,12 @@ vmlinux: /opt/kdump-tools/vmlinux/4.18.0-553.el8_10.x86_64/vmlinux
 
 ```text
 report:  /opt/kdump-tools/logs/kdump-report-20260701-100000.txt
+analysis: /opt/kdump-tools/logs/kdump-analysis-20260701-100000.txt
 ```
 
 리포트에는 기본 메타데이터와 함께 `sys`, `bt`, `bt -a`, `ps`, `log`, `kmem -i`, `mount`, `files` 명령 결과가 포함됩니다.
 
-LLM 분석이 활성화된 경우 리포트 끝에 `llm root cause analysis` 섹션이 추가됩니다. API 호출이나 응답 파싱에 실패해도 원본 crash 리포트는 유지되며, 실패 이유만 해당 섹션에 기록됩니다.
+LLM 분석이 활성화된 경우 원본 crash 리포트와 별도로 `kdump-analysis-<timestamp>.txt` 파일이 생성됩니다. API 호출이나 응답 파싱에 실패해도 원본 crash 리포트는 유지되며, 실패 이유는 분석 파일에 기록됩니다.
 
 ## 설정 파일
 
@@ -122,6 +123,7 @@ LLM 분석이 활성화된 경우 리포트 끝에 `llm root cause analysis` 섹
 VMLINUX_BASE="/opt/kdump-tools/vmlinux"
 REPORT_DIR="/opt/kdump-tools/logs"
 REPORT_PREFIX="kdump-report"
+ANALYSIS_PREFIX="kdump-analysis"
 
 # 선택 사항
 DEFAULT_VMCORE="/var/crash/127.0.0.1-2026-07-01-10:00:00/vmcore"
@@ -140,6 +142,7 @@ LLM_TIMEOUT=120
 - `VMLINUX_BASE`: 커널 버전별 `vmlinux` 파일을 찾을 기준 디렉터리
 - `REPORT_DIR`: `-report` 결과 파일을 저장할 디렉터리
 - `REPORT_PREFIX`: 생성되는 리포트 파일명 접두어
+- `ANALYSIS_PREFIX`: 생성되는 LLM 분석 파일명 접두어
 - `DEFAULT_VMCORE`: 명령줄 인자가 없을 때 사용할 기본 `vmcore` 경로
 - `REPORT_COMMANDS`: 리포트에 포함할 `crash` 명령 목록
 - `REPORT_COMMAND_FILE`: 별도 파일로 관리하는 `crash` 명령 목록

@@ -6,6 +6,7 @@ CONFIG_FILE_SET=0
 ENV_VMLINUX_BASE="${VMLINUX_BASE:-}"
 ENV_REPORT_DIR="${REPORT_DIR:-}"
 ENV_REPORT_PREFIX="${REPORT_PREFIX:-}"
+ENV_ANALYSIS_PREFIX="${ANALYSIS_PREFIX:-}"
 ENV_DEFAULT_VMCORE="${DEFAULT_VMCORE:-}"
 ENV_REPORT_COMMANDS="${REPORT_COMMANDS:-}"
 ENV_REPORT_COMMAND_FILE="${REPORT_COMMAND_FILE:-}"
@@ -23,6 +24,7 @@ ENV_LLM_ANTHROPIC_VERSION="${LLM_ANTHROPIC_VERSION:-}"
 VMLINUX_BASE="${VMLINUX_BASE:-/opt/kdump-tools/vmlinux}"
 REPORT_DIR="${REPORT_DIR:-/opt/kdump-tools/logs}"
 REPORT_PREFIX="${REPORT_PREFIX:-kdump-report}"
+ANALYSIS_PREFIX="${ANALYSIS_PREFIX:-kdump-analysis}"
 LLM_ENABLED="${LLM_ENABLED:-0}"
 LLM_PROVIDER="${LLM_PROVIDER:-openai}"
 LLM_BASE_URL="${LLM_BASE_URL:-}"
@@ -300,33 +302,34 @@ append_llm_analysis() {
     fi
 
     LLM_PROVIDER=$(normalize_llm_provider "$LLM_PROVIDER")
+    ANALYSIS_FILE="$REPORT_DIR/${ANALYSIS_PREFIX}-$(date +%Y%m%d-%H%M%S).txt"
 
     {
-        echo
-        echo "===== llm root cause analysis ====="
+        echo "kdump llm root cause analysis"
+        echo "source_report: $REPORT_FILE"
         echo "provider:  $LLM_PROVIDER"
         echo "model:     $LLM_MODEL"
         echo "generated: $(date -Is)"
         echo
-    } >> "$REPORT_FILE"
+    } > "$ANALYSIS_FILE"
 
     if ! command -v curl >/dev/null 2>&1; then
-        echo "LLM 분석을 건너뜁니다: curl 명령을 찾을 수 없습니다." >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: curl 명령을 찾을 수 없습니다." >> "$ANALYSIS_FILE"
         return
     fi
 
     if ! command -v python3 >/dev/null 2>&1; then
-        echo "LLM 분석을 건너뜁니다: python3 명령을 찾을 수 없습니다." >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: python3 명령을 찾을 수 없습니다." >> "$ANALYSIS_FILE"
         return
     fi
 
     if ! API_KEY=$(get_llm_api_key); then
-        echo "LLM 분석을 건너뜁니다: $API_KEY" >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: $API_KEY" >> "$ANALYSIS_FILE"
         return
     fi
 
     if ! LLM_URL=$(get_llm_url); then
-        echo "LLM 분석을 건너뜁니다: $LLM_URL" >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: $LLM_URL" >> "$ANALYSIS_FILE"
         return
     fi
 
@@ -352,27 +355,27 @@ append_llm_analysis() {
     chmod 600 "$CURL_CONFIG_FILE"
 
     if ! write_llm_payload "$PAYLOAD_FILE"; then
-        echo "LLM 분석을 건너뜁니다: 요청 payload 생성에 실패했습니다." >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: 요청 payload 생성에 실패했습니다." >> "$ANALYSIS_FILE"
         rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
         return
     fi
 
     if ! HTTP_STATUS=$(curl -sS --connect-timeout 10 --max-time "$LLM_TIMEOUT" -w '%{http_code}' -o "$RESPONSE_FILE" --config "$CURL_CONFIG_FILE" -X POST --data-binary "@$PAYLOAD_FILE" "$LLM_URL" 2>&1); then
-        echo "LLM 분석을 건너뜁니다: API 호출 실패" >> "$REPORT_FILE"
-        echo "$HTTP_STATUS" >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: API 호출 실패" >> "$ANALYSIS_FILE"
+        echo "$HTTP_STATUS" >> "$ANALYSIS_FILE"
         rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
         return
     fi
 
     if [ "$HTTP_STATUS" -lt 200 ] || [ "$HTTP_STATUS" -ge 300 ]; then
-        echo "LLM 분석을 건너뜁니다: API 응답 코드 $HTTP_STATUS" >> "$REPORT_FILE"
-        sed -n '1,40p' "$RESPONSE_FILE" >> "$REPORT_FILE"
+        echo "LLM 분석을 건너뜁니다: API 응답 코드 $HTTP_STATUS" >> "$ANALYSIS_FILE"
+        sed -n '1,40p' "$RESPONSE_FILE" >> "$ANALYSIS_FILE"
         rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
         return
     fi
 
-    if ! extract_llm_content "$RESPONSE_FILE" >> "$REPORT_FILE"; then
-        echo "LLM 분석을 건너뜁니다: 응답 파싱에 실패했습니다." >> "$REPORT_FILE"
+    if ! extract_llm_content "$RESPONSE_FILE" >> "$ANALYSIS_FILE"; then
+        echo "LLM 분석을 건너뜁니다: 응답 파싱에 실패했습니다." >> "$ANALYSIS_FILE"
     fi
 
     rm -f "$PAYLOAD_FILE" "$RESPONSE_FILE" "$CURL_CONFIG_FILE"
@@ -433,6 +436,7 @@ REPORT_MODE="$CLI_REPORT_MODE"
 [ -n "$ENV_VMLINUX_BASE" ] && VMLINUX_BASE="$ENV_VMLINUX_BASE"
 [ -n "$ENV_REPORT_DIR" ] && REPORT_DIR="$ENV_REPORT_DIR"
 [ -n "$ENV_REPORT_PREFIX" ] && REPORT_PREFIX="$ENV_REPORT_PREFIX"
+[ -n "$ENV_ANALYSIS_PREFIX" ] && ANALYSIS_PREFIX="$ENV_ANALYSIS_PREFIX"
 [ -n "$ENV_DEFAULT_VMCORE" ] && DEFAULT_VMCORE="$ENV_DEFAULT_VMCORE"
 [ -n "$ENV_REPORT_COMMANDS" ] && REPORT_COMMANDS="$ENV_REPORT_COMMANDS"
 [ -n "$ENV_REPORT_COMMAND_FILE" ] && REPORT_COMMAND_FILE="$ENV_REPORT_COMMAND_FILE"
@@ -520,6 +524,9 @@ if [ "$REPORT_MODE" -eq 1 ]; then
     append_llm_analysis
 
     echo "report:  $REPORT_FILE"
+    if [ -n "${ANALYSIS_FILE:-}" ]; then
+        echo "analysis: $ANALYSIS_FILE"
+    fi
     exit 0
 fi
 
