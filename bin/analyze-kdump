@@ -1,11 +1,128 @@
 #!/bin/bash
 set -e
 
-VMCORE="$1"
-VMLINUX_BASE="/opt/kdump-tools/vmlinux"
+CONFIG_FILE="${ANALYZE_KDUMP_CONF:-/opt/kdump-tools/analyze-kdump.conf}"
+CONFIG_FILE_SET=0
+ENV_VMLINUX_BASE="${VMLINUX_BASE:-}"
+ENV_REPORT_DIR="${REPORT_DIR:-}"
+ENV_REPORT_PREFIX="${REPORT_PREFIX:-}"
+ENV_DEFAULT_VMCORE="${DEFAULT_VMCORE:-}"
+ENV_REPORT_COMMANDS="${REPORT_COMMANDS:-}"
+ENV_REPORT_COMMAND_FILE="${REPORT_COMMAND_FILE:-}"
+VMLINUX_BASE="${VMLINUX_BASE:-/opt/kdump-tools/vmlinux}"
+REPORT_DIR="${REPORT_DIR:-/opt/kdump-tools/logs}"
+REPORT_PREFIX="${REPORT_PREFIX:-kdump-report}"
+REPORT_MODE=0
+VMCORE=""
+
+usage() {
+    echo "사용법: analyze-kdump [-config <conf-file>] [-report] [/path/to/vmcore]"
+}
+
+load_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        # shellcheck source=/opt/kdump-tools/analyze-kdump.conf
+        . "$CONFIG_FILE"
+    elif [ "$CONFIG_FILE_SET" -eq 1 ]; then
+        echo "conf 파일을 찾을 수 없습니다: $CONFIG_FILE"
+        exit 1
+    fi
+}
+
+print_default_report_commands() {
+    cat <<'EOF'
+set scroll off
+sys
+bt
+bt -a
+ps
+log
+kmem -i
+mount
+files
+EOF
+}
+
+run_crash_report() {
+    if [ -n "${REPORT_COMMAND_FILE:-}" ]; then
+        if [ ! -f "$REPORT_COMMAND_FILE" ]; then
+            echo "리포트 명령 파일을 찾을 수 없습니다: $REPORT_COMMAND_FILE"
+            exit 1
+        fi
+        {
+            cat "$REPORT_COMMAND_FILE"
+            echo "quit"
+        } | crash "$VMLINUX" "$VMCORE" >> "$REPORT_FILE" 2>&1
+        return
+    fi
+
+    {
+        if [ -n "${REPORT_COMMANDS:-}" ]; then
+            printf '%s\n' "$REPORT_COMMANDS"
+        else
+            print_default_report_commands
+        fi
+        echo "quit"
+    } | crash "$VMLINUX" "$VMCORE" >> "$REPORT_FILE" 2>&1
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -config)
+            if [ -z "${2:-}" ]; then
+                echo "-config 옵션에는 conf 파일 경로가 필요합니다."
+                usage
+                exit 1
+            fi
+            CONFIG_FILE="$2"
+            CONFIG_FILE_SET=1
+            shift 2
+            ;;
+        -report)
+            REPORT_MODE=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -*)
+            echo "알 수 없는 옵션입니다: $1"
+            usage
+            exit 1
+            ;;
+        *)
+            if [ -n "$VMCORE" ]; then
+                echo "vmcore 파일은 하나만 지정할 수 있습니다."
+                usage
+                exit 1
+            fi
+            VMCORE="$1"
+            shift
+            ;;
+    esac
+done
+
+CLI_VMCORE="$VMCORE"
+CLI_REPORT_MODE="$REPORT_MODE"
+load_config
+REPORT_MODE="$CLI_REPORT_MODE"
+
+[ -n "$ENV_VMLINUX_BASE" ] && VMLINUX_BASE="$ENV_VMLINUX_BASE"
+[ -n "$ENV_REPORT_DIR" ] && REPORT_DIR="$ENV_REPORT_DIR"
+[ -n "$ENV_REPORT_PREFIX" ] && REPORT_PREFIX="$ENV_REPORT_PREFIX"
+[ -n "$ENV_DEFAULT_VMCORE" ] && DEFAULT_VMCORE="$ENV_DEFAULT_VMCORE"
+[ -n "$ENV_REPORT_COMMANDS" ] && REPORT_COMMANDS="$ENV_REPORT_COMMANDS"
+[ -n "$ENV_REPORT_COMMAND_FILE" ] && REPORT_COMMAND_FILE="$ENV_REPORT_COMMAND_FILE"
+
+if [ -n "$CLI_VMCORE" ]; then
+    VMCORE="$CLI_VMCORE"
+elif [ -z "$VMCORE" ] && [ -n "${DEFAULT_VMCORE:-}" ]; then
+    VMCORE="$DEFAULT_VMCORE"
+fi
 
 if [ -z "$VMCORE" ]; then
-    echo "사용법: analyze-vmcore /path/to/vmcore"
+    usage
     exit 1
 fi
 
@@ -14,10 +131,21 @@ if [ ! -f "$VMCORE" ]; then
     exit 1
 fi
 
-KVER=$(crash --osrelease "$VMCORE" 2>/dev/null | tail -1)
+if ! command -v crash >/dev/null 2>&1; then
+    echo "crash 명령을 찾을 수 없습니다. crash 패키지를 설치해 주세요."
+    exit 1
+fi
+
+if ! KVER_OUTPUT=$(crash --osrelease "$VMCORE" 2>&1); then
+    echo "vmcore 커널 버전을 확인할 수 없습니다."
+    echo "$KVER_OUTPUT"
+    exit 1
+fi
+
+KVER=$(printf '%s\n' "$KVER_OUTPUT" | tail -1)
 
 if [ -z "$KVER" ] || [ "$KVER" = "unknown" ]; then
-    echo "vmcore 커널 버전을 확인 할 수 없습니다."
+    echo "vmcore 커널 버전을 확인할 수 없습니다."
     exit 1
 fi
 
@@ -39,5 +167,25 @@ echo "vmcore:  $VMCORE"
 echo "kernel:  $KVER"
 echo "vmlinux: $VMLINUX"
 echo
+
+if [ "$REPORT_MODE" -eq 1 ]; then
+    mkdir -p "$REPORT_DIR"
+    REPORT_FILE="$REPORT_DIR/${REPORT_PREFIX}-$(date +%Y%m%d-%H%M%S).txt"
+
+    {
+        echo "kdump summary report"
+        echo "generated: $(date -Is)"
+        echo "vmcore:    $VMCORE"
+        echo "kernel:    $KVER"
+        echo "vmlinux:   $VMLINUX"
+        echo
+        echo "===== crash summary ====="
+    } > "$REPORT_FILE"
+
+    run_crash_report
+
+    echo "report:  $REPORT_FILE"
+    exit 0
+fi
 
 exec crash "$VMLINUX" "$VMCORE"
