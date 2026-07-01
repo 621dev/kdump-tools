@@ -1,0 +1,43 @@
+#!/bin/bash
+set -e
+
+VMCORE="$1"
+VMLINUX_BASE="/opt/kdump-tools/vmlinux"
+
+if [ -z "$VMCORE" ]; then
+    echo "사용법: analyze-vmcore /path/to/vmcore"
+    exit 1
+fi
+
+if [ ! -f "$VMCORE" ]; then
+    echo "vmcore 파일을 찾을 수 없습니다: $VMCORE"
+    exit 1
+fi
+
+KVER=$(crash --osrelease "$VMCORE" 2>/dev/null | tail -1)
+
+if [ -z "$KVER" ] || [ "$KVER" = "unknown" ]; then
+    echo "vmcore 커널 버전을 확인 할 수 없습니다."
+    exit 1
+fi
+
+VMLINUX="$VMLINUX_BASE/${KVER}/vmlinux"
+
+if [ ! -f "$VMLINUX" ]; then
+    echo "해당 커널 버전의 vmlinux가 없습니다"
+    echo "커널 버전: $KVER"
+    echo "필요 경로: $VMLINUX"
+    echo
+    echo "설치 예:"
+    echo "  dnf debuginfo-install -y kernel-$KVER"
+    echo "  mkdir -p $VMLINUX_BASE/$KVER"
+    echo "  cp /usr/lib/debug/lib/modules/$KVER/vmlinux $VMLINUX_BASE/$KVER/"
+    exit 1
+fi
+
+echo "vmcore:  $VMCORE"
+echo "kernel:  $KVER"
+echo "vmlinux: $VMLINUX"
+echo
+
+exec crash "$VMLINUX" "$VMCORE"

@@ -1,0 +1,7 @@
+# Large binary files (GitHub has a 100MB file size limit)
+vmlinux/
+packages/
+
+# Logs
+logs/*
+!logs/.gitkeep
